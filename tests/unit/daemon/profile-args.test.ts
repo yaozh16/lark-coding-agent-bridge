@@ -40,4 +40,19 @@ describe('profile-scoped daemon paths and arguments', () => {
     expect(buildLauncherCmd(inputs)).toContain('run --profile "codex-dev"');
     expect(buildLauncherCmd(inputs)).toContain('set "LARK_CHANNEL_HOME=/tmp/lark-channel-home"');
   });
+
+  it('passes a service workspace override through daemon launch commands', () => {
+    const inputs = {
+      nodePath: '/usr/local/bin/node',
+      bridgeEntryPath: '/repo/bin/lark-channel-bridge.mjs',
+      envPath: '/usr/local/bin:/usr/bin',
+      profile: 'codex-dev',
+      channelHome: '/tmp/lark-channel-home',
+      workspace: '/repo/workspace',
+    };
+
+    expect(buildPlist(inputs)).toContain('<string>--workspace</string>\n        <string>/repo/workspace</string>');
+    expect(buildUnit(inputs)).toContain('run --profile "codex-dev" --workspace "/repo/workspace"');
+    expect(buildLauncherCmd(inputs)).toContain('run --profile "codex-dev" --workspace "/repo/workspace"');
+  });
 });

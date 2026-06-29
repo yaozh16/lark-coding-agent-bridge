@@ -42,6 +42,7 @@ import {
 } from '../../runtime/locks';
 import { resolveProfileRuntime } from '../../runtime/profile-runtime';
 import { refreshOwnerControls } from '../../policy/owner';
+import { resolveWorkingDirectory } from '../../policy/workspace';
 import { SessionStore } from '../../session/store';
 import { SessionCatalog } from '../../session/catalog';
 import { WorkspaceStore } from '../../workspace/store';
@@ -98,6 +99,7 @@ export async function runStart(opts: StartOptions): Promise<void> {
   const appPaths = runtime.appPaths;
   let profileConfig = runtime.profileConfig;
   configureLogger({ logsDir: appPaths.logsDir });
+  profileConfig = await applyCliWorkspaceOverride(profileConfig, opts.workspace, appPaths.profile);
 
   await preFlightChecks({
     skipCheckLarkCli: opts.skipCheckLarkCli,
@@ -238,8 +240,13 @@ export async function runStart(opts: StartOptions): Promise<void> {
                 });
                 const next = nextRuntime.cfg;
                 if (!isComplete(next)) throw new Error('config incomplete after change');
+                const nextProfileConfig = await applyCliWorkspaceOverride(
+                  nextRuntime.profileConfig,
+                  opts.workspace,
+                  nextRuntime.appPaths.profile,
+                );
                 assertReconnectAgentKindUnchanged(cfg.agentKind, next.agentKind);
-                const nextAgent = createRuntimeAgent(nextRuntime.profileConfig, {
+                const nextAgent = createRuntimeAgent(nextProfileConfig, {
                   ...nextRuntime.appPaths,
                   configPath: nextRuntime.configPath,
                 });
@@ -258,7 +265,7 @@ export async function runStart(opts: StartOptions): Promise<void> {
                 console.log(
                   `[restart] connecting new bridge with appId=${next.accounts.app.id} tenant=${next.accounts.app.tenant}...`,
                 );
-                const nextControls = makeControls(nextRuntime.appPaths, next, nextRuntime.profileConfig);
+                const nextControls = makeControls(nextRuntime.appPaths, next, nextProfileConfig);
                 // Connect-before-disconnect: if the new bridge fails to come up
                 // (e.g. network outage during a force-reconnect), throwing here
                 // leaves the old bridge — and its keepalive timer — untouched, so
@@ -304,7 +311,7 @@ export async function runStart(opts: StartOptions): Promise<void> {
                   );
                 }
                 cfg = next;
-                profileConfig = nextRuntime.profileConfig;
+                profileConfig = nextProfileConfig;
                 agent = nextAgent;
                 controls = nextControls;
                 console.log('✓ 已用新凭据重连');
@@ -366,6 +373,34 @@ export async function runStart(opts: StartOptions): Promise<void> {
       throw err;
     }
   }
+}
+
+async function applyCliWorkspaceOverride(
+  profileConfig: ProfileConfig,
+  workspace: string | undefined,
+  profile: string,
+): Promise<ProfileConfig> {
+  if (!workspace) return profileConfig;
+  const resolved = await resolveWorkingDirectory(workspace);
+  if (!resolved.ok) {
+    throw new Error(resolved.userVisible);
+  }
+  const profileDefaultWorkspace = profileConfig.workspaces.default;
+  if (profileDefaultWorkspace !== resolved.cwdRealpath) {
+    log.info('profile', 'workspace-override', {
+      profile,
+      requestedWorkspace: workspace,
+      profileDefaultWorkspace,
+      effectiveWorkspace: resolved.cwdRealpath,
+    });
+  }
+  return {
+    ...profileConfig,
+    workspaces: {
+      ...profileConfig.workspaces,
+      default: resolved.cwdRealpath,
+    },
+  };
 }
 
 async function checkRuntimeAgentAvailability(agent: AgentAdapter): Promise<AgentAvailability> {

@@ -25,6 +25,8 @@ export interface PlistInputs {
   profile: string;
   /** Root directory for config/profile state. */
   channelHome: string;
+  /** Optional one-shot/default workspace override for the daemon run. */
+  workspace?: string;
 }
 
 export function buildPlist(inputs: PlistInputs): string {
@@ -47,7 +49,11 @@ export function buildPlist(inputs: PlistInputs): string {
         <string>run</string>
         <string>--profile</string>
         <string>${escape(inputs.profile)}</string>
-    </array>
+${inputs.workspace
+    ? `        <string>--workspace</string>
+        <string>${escape(inputs.workspace)}</string>
+`
+    : ''}    </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -68,7 +74,7 @@ export function buildPlist(inputs: PlistInputs): string {
 `;
 }
 
-export async function writePlist(profile: string): Promise<void> {
+export async function writePlist(profile: string, opts: { workspace?: string } = {}): Promise<void> {
   const bridgeEntryPath = process.argv[1];
   if (!bridgeEntryPath) {
     throw new Error('cannot determine bridge entry path (process.argv[1] is empty)');
@@ -79,6 +85,7 @@ export async function writePlist(profile: string): Promise<void> {
     envPath: process.env.PATH ?? '',
     profile,
     channelHome: paths.rootDir,
+    workspace: opts.workspace,
   });
   const plistPath = launchAgentPlistPath(profile);
   await mkdir(dirname(plistPath), { recursive: true });

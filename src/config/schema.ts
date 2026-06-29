@@ -104,6 +104,13 @@ export interface AppPreferences {
    */
   showToolCalls?: boolean;
   /**
+   * Soft character budget for one streaming reply block. When a card/markdown
+   * reply grows past this size, bridge seals the current message and continues
+   * in a new one while dropping sealed content from active RunState memory.
+   * Default 12000. Range 4000-60000; out-of-range values fall back to default.
+   */
+  streamBlockMaxChars?: number;
+  /**
    * Cap on concurrent claude runs across all chats / topics. Excess runs
    * queue FIFO. Default 10. Mostly relevant for topic groups where each
    * topic can spawn its own run; capping protects RAM / token spend.
@@ -199,6 +206,14 @@ export function getMessageReplyMode(cfg: AppConfig): MessageReplyMode {
 /** Resolve the show-tool-calls preference with default fallback. */
 export function getShowToolCalls(cfg: AppConfig): boolean {
   return cfg.preferences?.showToolCalls !== false;
+}
+
+export function getStreamBlockMaxChars(cfg: AppConfig): number {
+  const raw = cfg.preferences?.streamBlockMaxChars;
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return 12_000;
+  const n = Math.floor(raw);
+  if (n < 4_000 || n > 60_000) return 12_000;
+  return n;
 }
 
 /** Resolve the max-concurrent-runs preference with default + sanity clamp. */

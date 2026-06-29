@@ -35,6 +35,7 @@ import {
   getRequireMentionInGroup,
   getRunIdleTimeoutMs,
   getShowToolCalls,
+  getStreamBlockMaxChars,
 } from '../config/schema';
 import { resolveAppSecret } from '../config/secret-resolver';
 import { log, reportMetric, withTrace } from '../core/logger';
@@ -51,9 +52,11 @@ import type { SessionCatalog } from '../session/catalog';
 import type { SessionStore } from '../session/store';
 import type { WorkspaceStore } from '../workspace/store';
 import { ActiveRuns, type RunHandle } from './active-runs';
+import { AgentEventProcessor, type RunRenderSink } from './agent-event-processor';
 import { ChatModeCache, type ChatMode } from './chat-mode-cache';
 import { handleCommentMention } from './comments';
 import { recordRunSessionEvent, startRunFlow } from './run-flow';
+import { CardRunRenderSink, MarkdownRunRenderSink } from './run-render-sink';
 import { commandSessionCatalogIdentity } from './session-catalog-identity';
 import { startKeepalive } from './keepalive';
 import { PendingQueue } from './pending-queue';
@@ -61,6 +64,7 @@ import { ProcessPool } from './process-pool';
 import { fetchQuotedContext, type QuotedContext } from './quote';
 import { addWorkingReaction, removeReaction } from './reaction';
 import { fetchKnownChats } from './lark-info';
+import { sendStartupStatus } from './startup-status';
 import type { AppPaths } from '../config/app-paths';
 
 const DEBOUNCE_MS = 600;
@@ -397,6 +401,13 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     agent: `${agent.displayName} (${agent.id})`,
     appId: cfg.accounts.app.id,
     procId: controls.processId,
+  });
+  void sendStartupStatus({
+    channel,
+    ownerOpenId: controls.botOwnerId,
+    profile: controls.profile,
+    agent,
+    profileConfig: controls.profileConfig,
   });
   console.log('正在监听消息。按 Ctrl+C 退出。\n');
 
@@ -768,6 +779,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
 
   const replyMode = getMessageReplyMode(controls.cfg);
   log.info('flush', 'reply-mode', { mode: replyMode });
+  const streamBlockMaxChars = getStreamBlockMaxChars(controls.cfg);
 
   // Re-read prefs on every flush so toggling /config mid-stream takes
   // effect immediately. Cheap object lookups, no allocation when on.
@@ -799,93 +811,36 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
 
   try {
     if (replyMode === 'card') {
-      let latestState: RunState = initialState;
-      let producerStarted = false;
-      let cardCtrl:
-        | { update(next: object | ((current: object) => object)): Promise<void> }
-        | undefined;
-      const renderDone = processAgentStream(
+      const sink = new CardRunRenderSink({
+        channel,
+        chatId,
+        sendOpts,
+        maxChars: streamBlockMaxChars,
+        renderOptions: cardRenderOptions,
+      });
+      await processAgentStream(
         handle,
         eventStream,
         scope,
         idleTimeoutMs,
         recordSession,
-        async (state) => {
-          latestState = state;
-          if (cardCtrl) {
-            await cardCtrl.update(renderCard(filterForPrefs(state), cardRenderOptions));
-          }
-        },
+        createProcessor(sink, filterForPrefs, streamBlockMaxChars),
       );
-      const streamDone = channel.stream(
-        chatId,
-        {
-          card: {
-            initial: renderCard(initialState, cardRenderOptions),
-            producer: async (ctrl) => {
-              producerStarted = true;
-              cardCtrl = ctrl;
-              await ctrl.update(renderCard(filterForPrefs(latestState), cardRenderOptions));
-              await renderDone;
-            },
-          },
-        },
-        sendOpts,
-      );
-      await awaitRenderAwareStream({
-        mode: replyMode,
-        streamDone,
-        renderDone,
-        producerStarted: () => producerStarted,
-        fallback: async (state) => {
-          await channel.send(
-            chatId,
-            { card: renderCard(filterForPrefs(state), cardRenderOptions) },
-            sendOpts,
-          );
-        },
-      });
     } else if (replyMode === 'markdown') {
-      let latestState: RunState = initialState;
-      let producerStarted = false;
-      let markdownCtrl: { setContent(markdown: string): Promise<void> } | undefined;
-      const renderDone = processAgentStream(
+      const sink = new MarkdownRunRenderSink({
+        channel,
+        chatId,
+        sendOpts,
+        maxChars: streamBlockMaxChars,
+      });
+      await processAgentStream(
         handle,
         eventStream,
         scope,
         idleTimeoutMs,
         recordSession,
-        async (state) => {
-          latestState = state;
-          if (markdownCtrl) {
-            await markdownCtrl.setContent(renderText(filterForPrefs(state)));
-          }
-        },
+        createProcessor(sink, filterForPrefs, streamBlockMaxChars),
       );
-      const streamDone = channel.stream(
-        chatId,
-        {
-          markdown: async (ctrl) => {
-            producerStarted = true;
-            markdownCtrl = ctrl;
-            await ctrl.setContent(renderText(filterForPrefs(latestState)));
-            await renderDone;
-          },
-        },
-        sendOpts,
-      );
-      await awaitRenderAwareStream({
-        mode: replyMode,
-        streamDone,
-        renderDone,
-        producerStarted: () => producerStarted,
-        fallback: async (state) => {
-          const body = renderText(filterForPrefs(state));
-          if (body.trim()) {
-            await channel.send(chatId, { markdown: body }, sendOpts);
-          }
-        },
-      });
     } else {
       // text mode: drain the agent stream without sending anything during
       // the run, then post the final rendered text once as a plain markdown
@@ -896,7 +851,15 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         scope,
         idleTimeoutMs,
         recordSession,
-        async () => {},
+        new AgentEventProcessor({
+          maxChars: Number.MAX_SAFE_INTEGER,
+          sink: {
+            measure: () => 0,
+            updateActive: async () => {},
+            sealActive: async () => {},
+            closeActive: async () => {},
+          },
+        }),
       );
       const body = renderText(filterForPrefs(finalState));
       if (body.trim()) {
@@ -922,10 +885,9 @@ async function processAgentStream(
   scope: string,
   idleTimeoutMs: number | undefined,
   recordSession: (event: AgentEvent) => void,
-  flush: (state: RunState) => Promise<void>,
+  processor: AgentEventProcessor,
 ): Promise<RunState> {
   const runStart = Date.now();
-  let state: RunState = initialState;
 
   // Idle watchdog: claude going silent for `idleTimeoutMs` is treated as
   // "presumed hung", we stop() and surface a timeout marker on the card.
@@ -998,13 +960,13 @@ async function processAgentStream(
         continue;
       }
 
-      const prevTerminal = state.terminal;
-      const prevFooter = state.footer;
-      state = reduce(state, evt);
+      const prev = processor.currentState();
+      const prevTerminal = prev.terminal;
+      const prevFooter = prev.footer;
+      const state = await processor.process(evt);
       if (state.footer !== prevFooter || state.terminal !== prevTerminal) {
         log.info('card', 'transition', { footer: state.footer, terminal: state.terminal });
       }
-      await flush(state);
       // Stop iterating as soon as we have a terminal state. Some claude
       // versions don't close stdout immediately after the result event, which
       // would leave the for-await waiting forever otherwise.
@@ -1018,22 +980,39 @@ async function processAgentStream(
   // watchdog or interrupt could land, don't clobber it — that real terminal
   // wins. This avoids "claude finished but flush was slow → timer fired
   // mid-flush → user sees 'idle_timeout' on a successful run".
-  if (state.terminal === 'running') {
+  let finalState = processor.currentState();
+  if (finalState.terminal === 'running') {
     if (idleFired) {
-      state = markIdleTimeout(state, Math.round(idleTimeoutMs! / 60_000));
+      finalState = markIdleTimeout(finalState, Math.round(idleTimeoutMs! / 60_000));
     } else if (handle.interrupted) {
-      state = markInterrupted(state);
+      finalState = markInterrupted(finalState);
     } else {
-      state = finalizeIfRunning(state);
+      finalState = finalizeIfRunning(finalState);
     }
   }
-  log.info('card', 'final', { terminal: state.terminal, interrupted: handle.interrupted });
-  reportMetric('run_e2e_ms', Date.now() - runStart, { terminal: state.terminal });
-  await flush(state);
+  log.info('card', 'final', { terminal: finalState.terminal, interrupted: handle.interrupted });
+  reportMetric('run_e2e_ms', Date.now() - runStart, { terminal: finalState.terminal });
+  finalState = await processor.finalize(finalState);
   if (handle.interrupted) {
     await handle.run.stop();
   }
-  return state;
+  return finalState;
+}
+
+function createProcessor(
+  sink: RunRenderSink,
+  filter: (state: RunState) => RunState,
+  maxChars: number,
+): AgentEventProcessor {
+  return new AgentEventProcessor({
+    maxChars,
+    sink: {
+      measure: (state) => sink.measure(filter(state)),
+      updateActive: (state) => sink.updateActive(filter(state)),
+      sealActive: (state) => sink.sealActive(filter(state)),
+      closeActive: (state) => sink.closeActive(filter(state)),
+    },
+  });
 }
 
 async function awaitRenderAwareStream(input: {

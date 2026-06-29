@@ -24,6 +24,8 @@ export interface UnitInputs {
   profile: string;
   /** Root directory for config/profile state. */
   channelHome: string;
+  /** Optional one-shot/default workspace override for the daemon run. */
+  workspace?: string;
 }
 
 /**
@@ -48,7 +50,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart="${escape(inputs.nodePath)}" "${escape(inputs.bridgeEntryPath)}" run --profile "${escape(inputs.profile)}"
+ExecStart="${escape(inputs.nodePath)}" "${escape(inputs.bridgeEntryPath)}" run --profile "${escape(inputs.profile)}"${inputs.workspace ? ` --workspace "${escape(inputs.workspace)}"` : ''}
 Restart=always
 RestartSec=5
 StandardOutput=append:${daemonStdoutPath(inputs.profile)}
@@ -61,7 +63,7 @@ WantedBy=default.target
 `;
 }
 
-export async function writeUnit(profile: string): Promise<void> {
+export async function writeUnit(profile: string, opts: { workspace?: string } = {}): Promise<void> {
   const bridgeEntryPath = process.argv[1];
   if (!bridgeEntryPath) {
     throw new Error('cannot determine bridge entry path (process.argv[1] is empty)');
@@ -72,6 +74,7 @@ export async function writeUnit(profile: string): Promise<void> {
     envPath: process.env.PATH ?? '',
     profile,
     channelHome: paths.rootDir,
+    workspace: opts.workspace,
   });
   const unitPath = systemdUnitPath(profile);
   await mkdir(dirname(unitPath), { recursive: true });

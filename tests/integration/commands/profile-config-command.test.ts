@@ -61,6 +61,7 @@ describe('profile-aware account and config commands', () => {
     await h.command('/config submit', {
       message_reply: 'text',
       show_tool_calls: 'hide',
+      stream_block_max_chars: '16000',
       max_concurrent_runs: '7',
       run_idle_timeout_minutes: '15',
       require_mention_in_group: 'no',
@@ -77,6 +78,7 @@ describe('profile-aware account and config commands', () => {
       messageReply: 'text',
       messageReplyMigrated: true,
       showToolCalls: false,
+      streamBlockMaxChars: 16000,
       maxConcurrentRuns: 7,
       runIdleTimeoutMinutes: 15,
     });

@@ -293,7 +293,8 @@ export async function runServiceStart(opts: ServiceStartOptions = {}): Promise<v
     },
   });
 
-  await adapter.install();
+  const launchOptions = opts.workspace ? { workspace: opts.workspace } : undefined;
+  await adapter.install(launchOptions);
 
   // If already running, stop first so start operations don't race.
   if (adapter.isRunning()) {
@@ -313,7 +314,7 @@ export async function runServiceStart(opts: ServiceStartOptions = {}): Promise<v
     }
   }
 
-  await reportConnectAfter('started', profile, adapter.start);
+  await reportConnectAfter('started', profile, () => adapter.start(launchOptions));
 }
 
 /**

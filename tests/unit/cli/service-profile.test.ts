@@ -181,6 +181,36 @@ describe('profile-aware service commands', () => {
     );
   });
 
+  it('passes a start workspace override to the service launcher', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    mocks.readAndPrune
+      .mockReturnValueOnce([])
+      .mockReturnValue([
+        processEntry({
+          id: 'p1',
+          pid: 12345,
+          appId: 'cli_codex',
+          profileName: 'codex-dev',
+          agentKind: 'codex',
+          botName: 'Codex Bot',
+        }),
+      ]);
+
+    await runServiceStart({
+      profile: 'codex-dev',
+      workspace: '/repo/workspace',
+      skipCheckLarkCli: true,
+    });
+
+    expect(mocks.resolveProfileRuntime).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      profile: 'codex-dev',
+      workspace: '/repo/workspace',
+      allowBootstrap: true,
+    }));
+    expect(mocks.adapter.install).toHaveBeenCalledWith({ workspace: '/repo/workspace' });
+    expect(mocks.adapter.start).toHaveBeenCalledWith({ workspace: '/repo/workspace' });
+  });
+
   it('uses materialized config for service preflight after env secret materialization', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const materializedCfg = {

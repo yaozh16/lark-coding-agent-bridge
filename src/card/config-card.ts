@@ -5,6 +5,7 @@ import type { MessageReplyMode } from '../config/schema';
 export interface ConfigFormOpts {
   messageReply: MessageReplyMode;
   showToolCalls: boolean;
+  streamBlockMaxChars: number;
   maxConcurrentRuns: number;
   /** 0 means "disabled". */
   runIdleTimeoutMinutes: number;
@@ -141,6 +142,20 @@ export function configFormCard(opts: ConfigFormOpts): object {
             {
               tag: 'markdown',
               content:
+                '\n**流式分段上限**\n' +
+                '_单条流式回复超过该字符预算后自动封存当前消息,并续写下一条_\n' +
+                '_默认 12000,范围 4000-60000_',
+            },
+            {
+              tag: 'input',
+              name: 'stream_block_max_chars',
+              default_value: String(opts.streamBlockMaxChars),
+              placeholder: { tag: 'plain_text', content: '12000' },
+              input_type: 'text',
+            },
+            {
+              tag: 'markdown',
+              content:
                 '\n**并发上限**\n' +
                 '_全局同时运行的 agent 进程数(主要影响话题群多话题并行场景)_\n' +
                 '_默认 10,范围 1-50。超出的请求会 FIFO 排队_',
@@ -261,6 +276,7 @@ export function configSavedCard(opts: ConfigFormOpts): object {
             '✅ **偏好已保存**\n\n' +
             `**消息回复方式**:${replyLabel}\n` +
             `**工具调用显示**:\`${opts.showToolCalls ? 'show' : 'hide'}\`\n` +
+            `**流式分段上限**:\`${opts.streamBlockMaxChars}\`\n` +
             `**并发上限**:\`${opts.maxConcurrentRuns}\`\n` +
             `**run 探活**:\`${opts.runIdleTimeoutMinutes > 0 ? `${opts.runIdleTimeoutMinutes} 分钟` : '关闭'}\`\n` +
             `**群里需要 @ bot**:\`${opts.requireMentionInGroup ? '是' : '否'}\`\n\n` +
