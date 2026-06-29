@@ -184,8 +184,9 @@ program
   .command('restart')
   .description('Restart the OS-managed daemon')
   .option('--profile <name>', 'profile name (defaults to active profile)')
-  .action(async (opts: { profile?: string }) => {
-    await runServiceRestart({ profile: opts.profile });
+  .option('--workspace <path>', 'working directory for the restarted bridge process')
+  .action(async (opts: { profile?: string; workspace?: string }) => {
+    await runServiceRestart({ profile: opts.profile, workspace: opts.workspace });
   });
 
 program

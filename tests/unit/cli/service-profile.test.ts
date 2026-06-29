@@ -58,7 +58,12 @@ vi.mock('../../../src/cli/preflight', () => ({
   preFlightChecks: mocks.preFlightChecks,
 }));
 
-const { runServiceStart, runServiceStatus, runServiceUnregister } = await import('../../../src/cli/commands/service');
+const {
+  runServiceRestart,
+  runServiceStart,
+  runServiceStatus,
+  runServiceUnregister,
+} = await import('../../../src/cli/commands/service');
 
 describe('profile-aware service commands', () => {
   beforeEach(() => {
@@ -501,6 +506,40 @@ describe('profile-aware service commands', () => {
     expect(mocks.materializeEnvSecretForService).toHaveBeenCalledWith({ profile: 'claude' });
     expect(mocks.adapter.install).toHaveBeenCalled();
     expect(mocks.adapter.start).toHaveBeenCalled();
+  });
+
+  it('restarts with an explicit workspace by reinstalling and starting the service', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    (mocks.adapter.isRunning as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    mocks.readAndPrune
+      .mockReturnValueOnce([
+        processEntry({
+          id: 'old',
+          pid: 1001,
+          appId: 'cli_codex',
+          profileName: 'codex-dev',
+          agentKind: 'codex',
+          botName: 'Codex Bot',
+        }),
+      ])
+      .mockReturnValue([
+        processEntry({
+          id: 'new',
+          pid: 1002,
+          appId: 'cli_codex',
+          profileName: 'codex-dev',
+          agentKind: 'codex',
+          botName: 'Codex Bot',
+        }),
+      ]);
+
+    await runServiceRestart({ profile: 'codex-dev', workspace: '/repo/workspace' });
+
+    expect(mocks.adapter.restart).not.toHaveBeenCalled();
+    expect(mocks.adapter.stop).toHaveBeenCalled();
+    expect(mocks.adapter.waitUntilStopped).toHaveBeenCalled();
+    expect(mocks.adapter.install).toHaveBeenCalledWith({ workspace: '/repo/workspace' });
+    expect(mocks.adapter.start).toHaveBeenCalledWith({ workspace: '/repo/workspace' });
   });
 
   it('uses the active profile when --profile is omitted and fails if none exists', async () => {

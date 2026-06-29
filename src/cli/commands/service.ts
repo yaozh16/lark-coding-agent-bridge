@@ -33,6 +33,7 @@ export interface ServiceStartOptions {
 
 export interface ServiceProfileOptions {
   profile?: string;
+  workspace?: string;
 }
 
 /**
@@ -374,11 +375,24 @@ export async function runServiceRestart(opts: ServiceProfileOptions = {}): Promi
     console.error('bot 还没在后台运行过。请先运行 `start` 启动。');
     process.exit(1);
   }
+  const launchOptions = opts.workspace ? { workspace: opts.workspace } : undefined;
   if (adapter.isRunning()) {
-    await reportConnectAfter('restarted', profile, adapter.restart);
+    if (!launchOptions) {
+      await reportConnectAfter('restarted', profile, adapter.restart);
+      return;
+    }
+    await reportConnectAfter('restarted', profile, async () => {
+      const stopped = await adapter.stop();
+      if (!stopped.ok) return stopped;
+      const ok = await adapter.waitUntilStopped();
+      if (!ok) return { ok: false, stderr: '旧 bot 实例没有完全停止。请稍后重试。' };
+      await adapter.install(launchOptions);
+      return adapter.start(launchOptions);
+    });
     return;
   }
-  await reportConnectAfter('started', profile, adapter.start);
+  if (launchOptions) await adapter.install(launchOptions);
+  await reportConnectAfter('started', profile, () => adapter.start(launchOptions));
 }
 
 /** `bridge status` — report whether the daemon is running, with pid + log paths. */
