@@ -1,4 +1,4 @@
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import pkg from '../../package.json';
 import { formatAgentPreflightDiagnostic, getAgentPreflightDiagnostic } from '../agent/preflight';
 import { runMigrate } from './commands/migrate';
@@ -27,6 +27,17 @@ import { runStart } from './commands/start';
 
 const program = new Command();
 
+function noHttpsProxyOption(): Option {
+  return new Option(
+    '--no-https-proxy',
+    'ignore HTTPS_PROXY for bridge Feishu/Lark SDK traffic (default; agent subprocesses still inherit env)',
+  ).argParser(() => true).default(true);
+}
+
+function noHttpsProxyFromCli(opts: { httpsProxy?: boolean }): boolean {
+  return opts.httpsProxy !== false;
+}
+
 program
   .name('lark-channel-bridge')
   .description('Bridge Feishu/Lark messenger with local CLI coding agents')
@@ -46,6 +57,7 @@ program
   .option('--app-id <id>', 'use an existing Lark/Feishu app instead of QR app creation')
   .option('--app-secret <secret>', 'App Secret for --app-id; prefer interactive input on shared machines')
   .option('--tenant <tenant>', 'tenant for --app-id (feishu or lark; default feishu)')
+  .addOption(noHttpsProxyOption())
   .option('--skip-check-lark-cli', 'skip lark-cli pre-flight check (auto-install + bind)')
   .action(async (opts: {
     config?: string;
@@ -57,9 +69,13 @@ program
     appId?: string;
     appSecret?: string;
     tenant?: string;
+    httpsProxy?: boolean;
     skipCheckLarkCli?: boolean;
   }) => {
-    await runStart(opts);
+    await runStart({
+      ...opts,
+      noHttpsProxy: noHttpsProxyFromCli(opts),
+    });
   });
 
 program
@@ -169,6 +185,7 @@ program
   .option('--app-id <id>', 'use an existing Lark/Feishu app instead of QR app creation')
   .option('--app-secret <secret>', 'App Secret for --app-id; prefer interactive input on shared machines')
   .option('--tenant <tenant>', 'tenant for --app-id (feishu or lark; default feishu)')
+  .addOption(noHttpsProxyOption())
   .option('--skip-check-lark-cli', 'skip lark-cli pre-flight check (auto-install + bind)')
   .action(async (opts: {
     profile?: string;
@@ -179,6 +196,7 @@ program
     appId?: string;
     appSecret?: string;
     tenant?: string;
+    httpsProxy?: boolean;
     skipCheckLarkCli?: boolean;
   }) => {
     await runServiceStart(opts);
@@ -199,7 +217,14 @@ program
   .option('--workspace <path>', 'working directory for the restarted bridge process')
   .option('--model <model>', 'Codex model override for this profile')
   .option('--effort <effort>', 'Codex reasoning effort override for this profile')
-  .action(async (opts: { profile?: string; workspace?: string; model?: string; effort?: string }) => {
+  .addOption(noHttpsProxyOption())
+  .action(async (opts: {
+    profile?: string;
+    workspace?: string;
+    model?: string;
+    effort?: string;
+    httpsProxy?: boolean;
+  }) => {
     await runServiceRestart({
       profile: opts.profile,
       workspace: opts.workspace,

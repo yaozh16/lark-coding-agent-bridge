@@ -79,6 +79,7 @@ export interface StartOptions {
   appId?: string;
   appSecret?: string;
   tenant?: string;
+  noHttpsProxy?: boolean;
   skipCheckLarkCli?: boolean;
   confirmStopRuntimeLockProcess?: (err: RuntimeLockConflictError) => boolean | Promise<boolean>;
   stopRuntimeLockProcess?: (meta: RuntimeLockMeta) => StopProcessEntryResult | Promise<StopProcessEntryResult>;
@@ -290,6 +291,7 @@ export async function runStart(opts: StartOptions): Promise<void> {
                   sessionCatalog,
                   workspaces,
                   controls: nextControls,
+                  noHttpsProxy: opts.noHttpsProxy,
                   appPaths: nextRuntime.appPaths,
                 });
                 console.log('[restart] disconnecting old bridge...');
@@ -346,6 +348,7 @@ export async function runStart(opts: StartOptions): Promise<void> {
           sessionCatalog,
           workspaces,
           controls,
+          noHttpsProxy: opts.noHttpsProxy,
           appPaths,
         });
 

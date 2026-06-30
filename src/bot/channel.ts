@@ -46,6 +46,7 @@ import {
 } from '../media/attachment';
 import { canUseDm, canUseGroup } from '../policy/access';
 import type { ScopeContext } from '../policy/run-policy';
+import { resolveWorkingDirectory } from '../policy/workspace';
 import { createOwnerRefreshController } from '../policy/owner';
 import { RunExecutor } from '../runtime/run-executor';
 import type { SessionCatalog } from '../session/catalog';
@@ -64,6 +65,11 @@ import { ProcessPool } from './process-pool';
 import { fetchQuotedContext, type QuotedContext } from './quote';
 import { addWorkingReaction, removeReaction } from './reaction';
 import { fetchKnownChats } from './lark-info';
+import {
+  formatShellCommandResult,
+  parseBangShellCommand,
+  runShellCommand,
+} from './shell-command';
 import { sendStartupStatus } from './startup-status';
 import type { AppPaths } from '../config/app-paths';
 
@@ -170,6 +176,7 @@ export interface StartChannelDeps {
   sessionCatalog?: SessionCatalog;
   workspaces: WorkspaceStore;
   controls: Controls;
+  noHttpsProxy?: boolean;
   appPaths?: Pick<AppPaths, 'secretsFile' | 'keystoreSaltFile' | 'mediaDir'>;
 }
 
@@ -238,8 +245,9 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     // Per-request REST timeout — without a cap a slow API can hang the
     // event-handling thread.
     httpTimeoutMs: 30_000,
-    // Route WS + REST through HTTPS_PROXY / HTTP_PROXY when set (no-op otherwise).
-    respectProxyEnv: true,
+    // By default bridge traffic to Feishu/Lark ignores HTTPS_PROXY. Agent
+    // subprocesses still inherit process.env and keep their own proxy behavior.
+    respectProxyEnv: deps.noHttpsProxy === false,
   };
 
   const channel = createLarkChannel(opts);
@@ -597,8 +605,81 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
     return;
   }
 
+  const shellCommand = parseBangShellCommand(msg.content);
+  if (shellCommand !== undefined) {
+    const dropped = pending.cancel(scope);
+    log.info('intake', 'shell-command', { scope, droppedPending: dropped.length });
+    await handleBangShellCommand({
+      channel,
+      msg,
+      scope,
+      chatMode,
+      workspaces,
+      controls,
+      command: shellCommand,
+    });
+    return;
+  }
+
   const size = pending.push(scope, msg);
   log.info('intake', 'queued', { scope, queueSize: size, debounceMs: DEBOUNCE_MS });
+}
+
+async function handleBangShellCommand(input: {
+  channel: LarkChannel;
+  msg: NormalizedMessage;
+  scope: string;
+  chatMode: ChatMode;
+  workspaces: WorkspaceStore;
+  controls: Controls;
+  command: string;
+}): Promise<void> {
+  const sendOpts = {
+    replyTo: input.msg.messageId,
+    ...(input.chatMode === 'topic' && input.msg.threadId ? { replyInThread: true } : {}),
+  };
+  if (!input.command) {
+    await input.channel.send(
+      input.msg.chatId,
+      { markdown: '用法: `!<shell command>`，例如 `!git status`。' },
+      sendOpts,
+    );
+    return;
+  }
+
+  const requestedCwd =
+    input.workspaces.cwdFor(input.scope) ?? input.controls.profileConfig.workspaces.default ?? '';
+  const workspace = await resolveWorkingDirectory(requestedCwd);
+  if (!workspace.ok) {
+    await input.channel.send(input.msg.chatId, { markdown: workspace.userVisible }, sendOpts);
+    return;
+  }
+
+  log.info('shell', 'start', {
+    scope: input.scope,
+    cwd: workspace.cwdRealpath,
+    commandPreview: input.command.length > 80 ? `${input.command.slice(0, 80)}…` : input.command,
+  });
+  try {
+    const result = await runShellCommand(input.command, workspace.cwdRealpath);
+    log.info('shell', 'done', {
+      scope: input.scope,
+      exitCode: result.exitCode,
+      signal: result.signal,
+      stdoutChars: result.stdout.length,
+      stderrChars: result.stderr.length,
+      stdoutTruncated: result.stdoutTruncated,
+      stderrTruncated: result.stderrTruncated,
+    });
+    await input.channel.send(input.msg.chatId, { markdown: formatShellCommandResult(result) }, sendOpts);
+  } catch (err) {
+    log.fail('shell', err, { scope: input.scope });
+    await input.channel.send(
+      input.msg.chatId,
+      { markdown: `✗ shell 执行失败: \`${err instanceof Error ? err.message : String(err)}\`` },
+      sendOpts,
+    );
+  }
 }
 
 interface RunBatchDeps {
