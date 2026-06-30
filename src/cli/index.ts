@@ -41,6 +41,8 @@ program
   .option('--profile <name>', 'profile name to run')
   .option('--agent <kind>', 'agent kind for a new profile (claude or codex)')
   .option('--workspace <path>', 'initial working directory for first-run profile bootstrap')
+  .option('--model <model>', 'Codex model override for this profile')
+  .option('--effort <effort>', 'Codex reasoning effort override for this profile')
   .option('--app-id <id>', 'use an existing Lark/Feishu app instead of QR app creation')
   .option('--app-secret <secret>', 'App Secret for --app-id; prefer interactive input on shared machines')
   .option('--tenant <tenant>', 'tenant for --app-id (feishu or lark; default feishu)')
@@ -50,6 +52,8 @@ program
     profile?: string;
     agent?: string;
     workspace?: string;
+    model?: string;
+    effort?: string;
     appId?: string;
     appSecret?: string;
     tenant?: string;
@@ -84,12 +88,16 @@ profile
   .description('Create a profile from QR registration or existing app credentials')
   .option('--agent <kind>', 'agent kind (claude or codex)')
   .option('--workspace <path>', 'initial working directory for this profile')
+  .option('--model <model>', 'Codex model override for this profile')
+  .option('--effort <effort>', 'Codex reasoning effort override for this profile')
   .option('--app-id <id>', 'use an existing Lark/Feishu app instead of QR app creation')
   .option('--app-secret <secret>', 'App Secret for --app-id; prefer interactive input on shared machines')
   .option('--tenant <tenant>', 'tenant for --app-id (feishu or lark; default feishu)')
   .action(async (name: string, opts: {
     agent?: string;
     workspace?: string;
+    model?: string;
+    effort?: string;
     appId?: string;
     appSecret?: string;
     tenant?: string;
@@ -156,6 +164,8 @@ program
   .option('--profile <name>', 'profile name (defaults to active profile)')
   .option('--agent <kind>', 'agent kind for first-run profile bootstrap (claude or codex)')
   .option('--workspace <path>', 'initial working directory for first-run profile bootstrap')
+  .option('--model <model>', 'Codex model override for this profile')
+  .option('--effort <effort>', 'Codex reasoning effort override for this profile')
   .option('--app-id <id>', 'use an existing Lark/Feishu app instead of QR app creation')
   .option('--app-secret <secret>', 'App Secret for --app-id; prefer interactive input on shared machines')
   .option('--tenant <tenant>', 'tenant for --app-id (feishu or lark; default feishu)')
@@ -164,6 +174,8 @@ program
     profile?: string;
     agent?: string;
     workspace?: string;
+    model?: string;
+    effort?: string;
     appId?: string;
     appSecret?: string;
     tenant?: string;
@@ -185,8 +197,15 @@ program
   .description('Restart the OS-managed daemon')
   .option('--profile <name>', 'profile name (defaults to active profile)')
   .option('--workspace <path>', 'working directory for the restarted bridge process')
-  .action(async (opts: { profile?: string; workspace?: string }) => {
-    await runServiceRestart({ profile: opts.profile, workspace: opts.workspace });
+  .option('--model <model>', 'Codex model override for this profile')
+  .option('--effort <effort>', 'Codex reasoning effort override for this profile')
+  .action(async (opts: { profile?: string; workspace?: string; model?: string; effort?: string }) => {
+    await runServiceRestart({
+      profile: opts.profile,
+      workspace: opts.workspace,
+      model: opts.model,
+      effort: opts.effort,
+    });
   });
 
 program

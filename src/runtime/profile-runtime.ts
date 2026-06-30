@@ -31,6 +31,7 @@ import {
 import {
   createDefaultProfileConfig,
   type AgentKind,
+  type CodexConfig,
   type CreateDefaultProfileConfigInput,
   type ProfileConfig,
   type RootConfig,
@@ -57,6 +58,8 @@ export interface ResolveProfileRuntimeOptions {
   profile?: string;
   agent?: string;
   workspace?: string;
+  codexModel?: string;
+  codexModelReasoningEffort?: string;
   appId?: string;
   appSecret?: string;
   tenant?: string;
@@ -136,7 +139,7 @@ export async function resolveProfileRuntime(
     workspace: opts.workspace,
     ...(migrationAgent ? { agentKind: migrationAgent } : {}),
     ...(needsMigration && migrationAgent === 'codex'
-      ? { codex: await createBootstrapCodexConfig(undefined) }
+      ? { codex: await createBootstrapCodexConfig(undefined, codexOptionsFromRuntimeOpts(opts)) }
       : {}),
   }, opts.handleActiveBridgeMigrationConflict);
 
@@ -169,7 +172,11 @@ export async function resolveProfileRuntime(
     if (defaultWorkspaceUpgrade.changed) {
       rootConfig = defaultWorkspaceUpgrade.rootConfig;
     }
-    if (runtimeUpgrade.changed || defaultWorkspaceUpgrade.changed) {
+    const codexOverride = applyCodexProfileOverrides(rootConfig, profile, opts);
+    if (codexOverride.changed) {
+      rootConfig = codexOverride.rootConfig;
+    }
+    if (runtimeUpgrade.changed || defaultWorkspaceUpgrade.changed || codexOverride.changed) {
       await saveRootConfig(rootConfig, configPath);
       profileConfig = rootConfig.profiles[profile]!;
       log.info('profile', 'legacy-runtime-defaults-upgraded', {
@@ -177,6 +184,7 @@ export async function resolveProfileRuntime(
         permissions: runtimeUpgrade.permissions,
         codex: runtimeUpgrade.codex,
         workspace: defaultWorkspaceUpgrade.changed,
+        codexModel: codexOverride.changed,
       });
     }
     assertBootstrapAppMatchesExistingProfile(opts, profile, profileConfig);
@@ -188,12 +196,13 @@ export async function resolveProfileRuntime(
   if (isComplete(existing)) {
     assertBootstrapAppMatchesExistingConfig(opts, profile, existing);
     const cfg = await maybeMigratePlaintextSecret(existing, configPath, appPaths);
-    const profileConfig = createRuntimeProfileConfig({
+    let profileConfig = createRuntimeProfileConfig({
       agentKind: requestedAgent ?? 'claude',
       accounts: cfg.accounts,
       preferences: cfg.preferences,
       secrets: cfg.secrets,
     });
+    profileConfig = applyCodexOverridesToProfileConfig(profileConfig, opts);
     profileConfig.workspaces.default = await resolveConvertedLegacyDefaultWorkspace(opts, appPaths);
     const root = createRootConfig(profile, profileConfig, cfg.secrets);
     await saveRootConfig(root, configPath);
@@ -214,6 +223,8 @@ export async function resolveProfileRuntime(
     preferences: encrypted.preferences,
     secrets: encrypted.secrets,
     workspace,
+    codexModel: opts.codexModel,
+    codexModelReasoningEffort: opts.codexModelReasoningEffort,
     defaultWorkspace: appPaths.defaultWorkspaceDir,
     profileDir: appPaths.profileDir,
   });
@@ -243,6 +254,8 @@ async function bootstrapProfileIntoExistingRoot(args: {
     preferences: encrypted.preferences,
     secrets: encrypted.secrets,
     workspace,
+    codexModel: opts.codexModel,
+    codexModelReasoningEffort: opts.codexModelReasoningEffort,
     defaultWorkspace: appPaths.defaultWorkspaceDir,
     profileDir: appPaths.profileDir,
   });
@@ -346,6 +359,89 @@ function upgradeLegacyRuntimeDefaults(
       ? markPermissionDefaultsMigration(nextRoot, profile)
       : nextRoot,
   };
+}
+
+function codexOptionsFromRuntimeOpts(
+  opts: ResolveProfileRuntimeOptions,
+): { model?: string; modelReasoningEffort?: string } {
+  return {
+    ...(opts.codexModel !== undefined ? { model: opts.codexModel } : {}),
+    ...(opts.codexModelReasoningEffort !== undefined
+      ? { modelReasoningEffort: opts.codexModelReasoningEffort }
+      : {}),
+  };
+}
+
+function hasCodexProfileOverrides(opts: ResolveProfileRuntimeOptions): boolean {
+  return opts.codexModel !== undefined || opts.codexModelReasoningEffort !== undefined;
+}
+
+function applyCodexProfileOverrides(
+  rootConfig: RootConfig,
+  profile: string,
+  opts: ResolveProfileRuntimeOptions,
+): { rootConfig: RootConfig; changed: boolean } {
+  if (!hasCodexProfileOverrides(opts)) return { rootConfig, changed: false };
+  const profileConfig = rootConfig.profiles[profile];
+  if (!profileConfig) return { rootConfig, changed: false };
+  const nextProfile = applyCodexOverridesToProfileConfig(profileConfig, opts);
+  if (nextProfile === profileConfig) return { rootConfig, changed: false };
+  return {
+    changed: true,
+    rootConfig: {
+      ...rootConfig,
+      profiles: {
+        ...rootConfig.profiles,
+        [profile]: nextProfile,
+      },
+    },
+  };
+}
+
+function applyCodexOverridesToProfileConfig(
+  profileConfig: ProfileConfig,
+  opts: ResolveProfileRuntimeOptions,
+): ProfileConfig {
+  if (!hasCodexProfileOverrides(opts)) return profileConfig;
+  if (profileConfig.agentKind !== 'codex') {
+    throw new Error('--model/--effort are only supported for codex profiles');
+  }
+  if (!profileConfig.codex) {
+    throw new Error('codex profile requires codex configuration');
+  }
+  const nextCodex = applyCodexModelFields(profileConfig.codex, {
+    ...(opts.codexModel !== undefined ? { model: opts.codexModel } : {}),
+    ...(opts.codexModelReasoningEffort !== undefined
+      ? { modelReasoningEffort: opts.codexModelReasoningEffort }
+      : {}),
+  });
+  if (codexConfigEqual(nextCodex, profileConfig.codex)) return profileConfig;
+  return {
+    ...profileConfig,
+    codex: nextCodex,
+  };
+}
+
+function applyCodexModelFields(
+  codex: CodexConfig,
+  opts: { model?: string; modelReasoningEffort?: string },
+): CodexConfig {
+  const next: CodexConfig = { ...codex };
+  if ('model' in opts) {
+    const model = opts.model?.trim();
+    if (model) next.model = model;
+    else delete next.model;
+  }
+  if ('modelReasoningEffort' in opts) {
+    const effort = opts.modelReasoningEffort?.trim();
+    if (effort) next.modelReasoningEffort = effort;
+    else delete next.modelReasoningEffort;
+  }
+  return next;
+}
+
+function codexConfigEqual(a: CodexConfig, b: CodexConfig): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 async function ensureProfileDefaultWorkspace(

@@ -74,6 +74,8 @@ export interface StartOptions {
   profile?: string;
   agent?: string;
   workspace?: string;
+  model?: string;
+  effort?: string;
   appId?: string;
   appSecret?: string;
   tenant?: string;
@@ -84,7 +86,15 @@ export interface StartOptions {
 
 export async function runStart(opts: StartOptions): Promise<void> {
   const runtime = await resolveProfileRuntime({
-    ...opts,
+    config: opts.config,
+    profile: opts.profile,
+    agent: opts.agent,
+    workspace: opts.workspace,
+    codexModel: opts.model,
+    codexModelReasoningEffort: opts.effort,
+    appId: opts.appId,
+    appSecret: opts.appSecret,
+    tenant: opts.tenant,
     allowBootstrap: true,
     handleActiveBridgeMigrationConflict: async (err) => {
       const handled = await promptAndStopActiveBridgeMigrationConflict(err, {

@@ -14,6 +14,8 @@ export interface BootstrapProfileInput {
   workspace?: string;
   defaultWorkspace?: string;
   codexBinaryPath?: string;
+  codexModel?: string;
+  codexModelReasoningEffort?: string;
   profileDir?: string;
 }
 
@@ -27,7 +29,10 @@ export async function createBootstrapProfileConfig(
       : undefined;
   const codex =
     input.agentKind === 'codex'
-      ? await createBootstrapCodexConfig(input.codexBinaryPath)
+      ? await createBootstrapCodexConfig(input.codexBinaryPath, {
+          model: input.codexModel,
+          modelReasoningEffort: input.codexModelReasoningEffort,
+        })
       : undefined;
   const profile = createDefaultProfileConfig({
     agentKind: input.agentKind,
@@ -59,7 +64,10 @@ async function ensureManagedDefaultWorkspace(path: string): Promise<string> {
   return realpath(path);
 }
 
-export async function createBootstrapCodexConfig(binaryPath: string | undefined) {
+export async function createBootstrapCodexConfig(
+  binaryPath: string | undefined,
+  opts: { model?: string; modelReasoningEffort?: string } = {},
+) {
   const command = binaryPath ?? process.env.LARK_CHANNEL_CODEX_BIN ?? 'codex';
   let resolvedBinary: string;
   try {
@@ -75,7 +83,13 @@ export async function createBootstrapCodexConfig(binaryPath: string | undefined)
       errno,
     });
   }
-  return { binaryPath: resolvedBinary };
+  return {
+    binaryPath: resolvedBinary,
+    ...(opts.model?.trim() ? { model: opts.model.trim() } : {}),
+    ...(opts.modelReasoningEffort?.trim()
+      ? { modelReasoningEffort: opts.modelReasoningEffort.trim() }
+      : {}),
+  };
 }
 
 function codexBootstrapBinaryErrorCode(errno: string | undefined) {

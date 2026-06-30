@@ -6,6 +6,10 @@ export interface ConfigFormOpts {
   messageReply: MessageReplyMode;
   showToolCalls: boolean;
   streamBlockMaxChars: number;
+  codex?: {
+    model?: string;
+    modelReasoningEffort?: string;
+  };
   maxConcurrentRuns: number;
   /** 0 means "disabled". */
   runIdleTimeoutMinutes: number;
@@ -153,6 +157,36 @@ export function configFormCard(opts: ConfigFormOpts): object {
               placeholder: { tag: 'plain_text', content: '12000' },
               input_type: 'text',
             },
+            ...(opts.codex
+              ? [
+                  {
+                    tag: 'markdown',
+                    content:
+                      '\n**Codex 模型**\n' +
+                      '_下次请求生效。留空 = 继承 Codex CLI 配置 (`config.toml`)_',
+                  },
+                  {
+                    tag: 'input',
+                    name: 'codex_model',
+                    default_value: opts.codex.model ?? '',
+                    placeholder: { tag: 'plain_text', content: 'gpt-5.5' },
+                    input_type: 'text',
+                  },
+                  {
+                    tag: 'markdown',
+                    content:
+                      '\n**Codex 推理强度**\n' +
+                      '_写入 `model_reasoning_effort`。留空 = 继承 Codex CLI 配置_',
+                  },
+                  {
+                    tag: 'input',
+                    name: 'codex_model_reasoning_effort',
+                    default_value: opts.codex.modelReasoningEffort ?? '',
+                    placeholder: { tag: 'plain_text', content: 'xhigh' },
+                    input_type: 'text',
+                  },
+                ]
+              : []),
             {
               tag: 'markdown',
               content:
@@ -265,6 +299,10 @@ export function configSavedCard(opts: ConfigFormOpts): object {
         : '纯文本';
   const summarize = (list: string[]): string =>
     list.length === 0 ? '_(空)_' : `${list.length} 项`;
+  const codexLines = opts.codex
+    ? `**Codex 模型**:\`${opts.codex.model || '继承 Codex CLI'}\`\n` +
+      `**Codex 推理强度**:\`${opts.codex.modelReasoningEffort || '继承 Codex CLI'}\`\n`
+    : '';
   return {
     schema: '2.0',
     config: { summary: { content: '偏好已保存' } },
@@ -277,6 +315,7 @@ export function configSavedCard(opts: ConfigFormOpts): object {
             `**消息回复方式**:${replyLabel}\n` +
             `**工具调用显示**:\`${opts.showToolCalls ? 'show' : 'hide'}\`\n` +
             `**流式分段上限**:\`${opts.streamBlockMaxChars}\`\n` +
+            codexLines +
             `**并发上限**:\`${opts.maxConcurrentRuns}\`\n` +
             `**run 探活**:\`${opts.runIdleTimeoutMinutes > 0 ? `${opts.runIdleTimeoutMinutes} 分钟` : '关闭'}\`\n` +
             `**群里需要 @ bot**:\`${opts.requireMentionInGroup ? '是' : '否'}\`\n\n` +

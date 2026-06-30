@@ -79,6 +79,8 @@ describe('profile create command', () => {
         rootDir: root,
         agent: 'codex',
         workspace,
+        model: 'gpt-5.5',
+        effort: 'xhigh',
         appId: 'cli_codex_dev',
         appSecret: 'manual-secret',
         tenant: 'feishu',
@@ -94,6 +96,10 @@ describe('profile create command', () => {
     const configPath = join(root, 'config.json');
     const saved = JSON.parse(await readFile(configPath, 'utf8'));
     expect(saved.profiles['codex-dev']?.agentKind).toBe('codex');
+    expect(saved.profiles['codex-dev']?.codex).toMatchObject({
+      model: 'gpt-5.5',
+      modelReasoningEffort: 'xhigh',
+    });
     expect(saved.profiles['codex-dev']).not.toHaveProperty('sandbox');
 
     const loaded = await loadRootConfig(configPath);

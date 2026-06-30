@@ -52,6 +52,35 @@ describe('Codex argv contract', () => {
     );
   });
 
+  it('passes explicit model and reasoning effort to codex exec', () => {
+    expect(
+      buildCodexArgs({
+        cwd: '/repo',
+        sandbox: 'workspace-write',
+        model: 'gpt-5.5',
+        modelReasoningEffort: 'xhigh',
+      }),
+    ).toEqual([
+      'exec',
+      '--json',
+      '--model',
+      'gpt-5.5',
+      '--sandbox',
+      'workspace-write',
+      '-c',
+      'approval_policy="never"',
+      '-c',
+      'shell_environment_policy.inherit="all"',
+      '-c',
+      'model_reasoning_effort="xhigh"',
+      '--ignore-rules',
+      '--skip-git-repo-check',
+      '-C',
+      '/repo',
+      '-',
+    ]);
+  });
+
   it('separates image flags from stdin prompt for fresh exec', () => {
     expect(
       buildCodexArgs({

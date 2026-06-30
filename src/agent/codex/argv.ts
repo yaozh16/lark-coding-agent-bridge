@@ -4,6 +4,8 @@ export interface BuildCodexArgsInput {
   cwd: string;
   sandbox: SandboxMode;
   threadId?: string;
+  model?: string;
+  modelReasoningEffort?: string;
   images?: readonly string[];
   ignoreUserConfig?: boolean;
   ignoreRules?: boolean;
@@ -19,12 +21,16 @@ export function buildCodexArgs(input: BuildCodexArgsInput): string[] {
   }
 
   const globalFlags = [
+    ...(input.model ? ['--model', input.model] : []),
     '--sandbox',
     input.sandbox,
     '-c',
     'approval_policy="never"',
     '-c',
     'shell_environment_policy.inherit="all"',
+    ...(input.modelReasoningEffort
+      ? ['-c', `model_reasoning_effort="${escapeTomlBasicString(input.modelReasoningEffort)}"`]
+      : []),
     ...(input.ignoreUserConfig === true ? ['--ignore-user-config'] : []),
     ...(input.ignoreRules === false ? [] : ['--ignore-rules']),
     '--skip-git-repo-check',
@@ -54,4 +60,8 @@ export function buildCodexArgs(input: BuildCodexArgsInput): string[] {
     ...(imageFlags.length > 0 ? ['--'] : []),
     '-',
   ];
+}
+
+function escapeTomlBasicString(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }

@@ -30,6 +30,8 @@ export interface ProfileCommandOptions {
 export interface ProfileCreateOptions extends ProfileCommandOptions {
   agent?: string;
   workspace?: string;
+  model?: string;
+  effort?: string;
   appId?: string;
   appSecret?: string;
   tenant?: string;
@@ -127,6 +129,8 @@ export async function runProfileCreate(
       profile: name,
       agent: opts.agent,
       workspace: opts.workspace,
+      codexModel: opts.model,
+      codexModelReasoningEffort: opts.effort,
       appId: opts.appId,
       appSecret: opts.appSecret,
       tenant: opts.tenant,

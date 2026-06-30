@@ -35,7 +35,7 @@ import {
   getStreamBlockMaxChars,
   secretKeyForApp,
 } from '../config/schema';
-import type { ProfileAccess, ProfileConfig } from '../config/profile-schema';
+import type { CodexConfig, ProfileAccess, ProfileConfig } from '../config/profile-schema';
 import { resolveAppPaths } from '../config/app-paths';
 import { accessToClaudePermissionMode } from '../config/permissions';
 import {
@@ -1164,6 +1164,11 @@ async function handleDoctor(args: string, ctx: CommandContext): Promise<void> {
       scopeId: `${ctx.scope}:doctor`,
       policy,
       nowait: true,
+      model: capability.agentId === 'codex' ? ctx.controls.profileConfig.codex?.model : undefined,
+      modelReasoningEffort:
+        capability.agentId === 'codex'
+          ? ctx.controls.profileConfig.codex?.modelReasoningEffort
+          : undefined,
       stopGraceMs: getAgentStopGraceMs(ctx.controls.cfg),
       observability: {
         profile: ctx.controls.profile,
@@ -1755,6 +1760,14 @@ async function showConfigForm(ctx: CommandContext): Promise<void> {
     messageReply: getMessageReplyMode(ctx.controls.cfg),
     showToolCalls: getShowToolCalls(ctx.controls.cfg),
     streamBlockMaxChars: getStreamBlockMaxChars(ctx.controls.cfg),
+    ...(ctx.controls.profileConfig.agentKind === 'codex'
+      ? {
+          codex: {
+            model: ctx.controls.profileConfig.codex?.model,
+            modelReasoningEffort: ctx.controls.profileConfig.codex?.modelReasoningEffort,
+          },
+        }
+      : {}),
     maxConcurrentRuns: getMaxConcurrentRuns(ctx.controls.cfg),
     runIdleTimeoutMinutes: ms ? Math.round(ms / 60_000) : 0,
     requireMentionInGroup: getRequireMentionInGroup(ctx.controls.cfg),
@@ -1805,6 +1818,13 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
       : 'card';
   const rawTools = String(fv.show_tool_calls ?? '').trim();
   const showToolCalls = rawTools !== 'hide';
+  const nextCodex =
+    ctx.controls.profileConfig.agentKind === 'codex' && ctx.controls.profileConfig.codex
+      ? applyCodexModelForm(ctx.controls.profileConfig.codex, {
+          model: String(fv.codex_model ?? '').trim(),
+          modelReasoningEffort: String(fv.codex_model_reasoning_effort ?? '').trim(),
+        })
+      : undefined;
   // Parse stream_block_max_chars; empty / invalid input keeps current value.
   const rawStreamBlockMax = String(fv.stream_block_max_chars ?? '').trim();
   const parsedStreamBlockMax = Number(rawStreamBlockMax);
@@ -1895,7 +1915,13 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
         larkCliPolicyApplied = true;
         failureStep = 'config.save';
       }
-      await savePreferencesConfig(ctx, nextPreferences, requireMentionInGroup, larkCliIdentity);
+      await savePreferencesConfig(
+        ctx,
+        nextPreferences,
+        requireMentionInGroup,
+        larkCliIdentity,
+        nextCodex,
+      );
     } catch (err) {
       let rollbackFailed = false;
       if (larkCliIdentityChanged) {
@@ -1923,6 +1949,8 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
       messageReply,
       showToolCalls,
       streamBlockMaxChars,
+      codexModel: nextCodex?.model,
+      codexModelReasoningEffort: nextCodex?.modelReasoningEffort,
       maxConcurrentRuns,
       runIdleTimeoutMinutes,
       requireMentionInGroup,
@@ -1939,6 +1967,14 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
         messageReply,
         showToolCalls,
         streamBlockMaxChars,
+        ...(nextCodex
+          ? {
+              codex: {
+                model: nextCodex.model,
+                modelReasoningEffort: nextCodex.modelReasoningEffort,
+              },
+            }
+          : {}),
         maxConcurrentRuns,
         runIdleTimeoutMinutes,
         requireMentionInGroup,
@@ -2052,6 +2088,18 @@ async function applyConfigLarkCliIdentityPolicy(
   return ok;
 }
 
+function applyCodexModelForm(
+  codex: CodexConfig,
+  input: { model: string; modelReasoningEffort: string },
+): CodexConfig {
+  const next: CodexConfig = { ...codex };
+  if (input.model) next.model = input.model;
+  else delete next.model;
+  if (input.modelReasoningEffort) next.modelReasoningEffort = input.modelReasoningEffort;
+  else delete next.modelReasoningEffort;
+  return next;
+}
+
 async function saveAccountConfig(
   ctx: CommandContext,
   newCfg: AppConfig,
@@ -2084,6 +2132,7 @@ async function savePreferencesConfig(
   preferences: AppPreferences,
   requireMentionInGroup: boolean,
   larkCliIdentity: ProfileConfig['larkCli']['identityPreset'],
+  codexConfig?: CodexConfig,
 ): Promise<void> {
   const larkCli = {
     identityPreset: larkCliIdentity,
@@ -2098,6 +2147,12 @@ async function savePreferencesConfig(
     if (!root) {
       ctx.controls.cfg.preferences = preferences;
       ctx.controls.profileConfig.larkCli = larkCli;
+      if (codexConfig && ctx.controls.profileConfig.agentKind === 'codex') {
+        ctx.controls.profileConfig = {
+          ...ctx.controls.profileConfig,
+          codex: codexConfig,
+        };
+      }
       await saveConfig(ctx.controls.cfg, ctx.controls.configPath);
       return;
     }
@@ -2111,6 +2166,7 @@ async function savePreferencesConfig(
         ...profile.preferences,
         ...profilePreferences,
       },
+      ...(codexConfig ? { codex: codexConfig } : {}),
       access: {
         ...profile.access,
         requireMentionInGroup,

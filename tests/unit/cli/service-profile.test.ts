@@ -204,12 +204,16 @@ describe('profile-aware service commands', () => {
     await runServiceStart({
       profile: 'codex-dev',
       workspace: '/repo/workspace',
+      model: 'gpt-5.5',
+      effort: 'xhigh',
       skipCheckLarkCli: true,
     });
 
     expect(mocks.resolveProfileRuntime).toHaveBeenNthCalledWith(1, expect.objectContaining({
       profile: 'codex-dev',
       workspace: '/repo/workspace',
+      codexModel: 'gpt-5.5',
+      codexModelReasoningEffort: 'xhigh',
       allowBootstrap: true,
     }));
     expect(mocks.adapter.install).toHaveBeenCalledWith({ workspace: '/repo/workspace' });
@@ -533,8 +537,19 @@ describe('profile-aware service commands', () => {
         }),
       ]);
 
-    await runServiceRestart({ profile: 'codex-dev', workspace: '/repo/workspace' });
+    await runServiceRestart({
+      profile: 'codex-dev',
+      workspace: '/repo/workspace',
+      model: 'gpt-5.5',
+      effort: 'xhigh',
+    });
 
+    expect(mocks.resolveProfileRuntime).toHaveBeenCalledWith({
+      profile: 'codex-dev',
+      codexModel: 'gpt-5.5',
+      codexModelReasoningEffort: 'xhigh',
+      allowBootstrap: false,
+    });
     expect(mocks.adapter.restart).not.toHaveBeenCalled();
     expect(mocks.adapter.stop).toHaveBeenCalled();
     expect(mocks.adapter.waitUntilStopped).toHaveBeenCalled();

@@ -22,6 +22,8 @@ export interface ServiceStartOptions {
   profile?: string;
   agent?: string;
   workspace?: string;
+  model?: string;
+  effort?: string;
   appId?: string;
   appSecret?: string;
   tenant?: string;
@@ -34,6 +36,8 @@ export interface ServiceStartOptions {
 export interface ServiceProfileOptions {
   profile?: string;
   workspace?: string;
+  model?: string;
+  effort?: string;
 }
 
 /**
@@ -102,6 +106,8 @@ async function ensureBridgeConfigured(
     profile: opts.profile,
     agent: opts.agent,
     workspace: opts.workspace,
+    codexModel: opts.model,
+    codexModelReasoningEffort: opts.effort,
     appId: opts.appId,
     appSecret: opts.appSecret,
     tenant: opts.tenant,
@@ -374,6 +380,14 @@ export async function runServiceRestart(opts: ServiceProfileOptions = {}): Promi
   if (!adapter.fileExists()) {
     console.error('bot 还没在后台运行过。请先运行 `start` 启动。');
     process.exit(1);
+  }
+  if (opts.model !== undefined || opts.effort !== undefined) {
+    await resolveProfileRuntime({
+      profile,
+      codexModel: opts.model,
+      codexModelReasoningEffort: opts.effort,
+      allowBootstrap: false,
+    });
   }
   const launchOptions = opts.workspace ? { workspace: opts.workspace } : undefined;
   if (adapter.isRunning()) {

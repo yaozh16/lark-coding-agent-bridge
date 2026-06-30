@@ -38,6 +38,8 @@ export interface CodexConfig {
   sha256?: string;
   owner?: number;
   mode?: number;
+  model?: string;
+  modelReasoningEffort?: string;
   codexHome?: string;
   inheritCodexHome?: boolean;
   ignoreUserConfig?: boolean;
@@ -277,6 +279,12 @@ function normalizeCodex(input: CodexConfig & { flags?: unknown }): CodexConfig {
     ...(typeof input.sha256 === 'string' ? { sha256: input.sha256 } : {}),
     ...(typeof input.owner === 'number' ? { owner: input.owner } : {}),
     ...(typeof input.mode === 'number' ? { mode: input.mode } : {}),
+    ...(typeof input.model === 'string' && input.model.trim()
+      ? { model: input.model.trim() }
+      : {}),
+    ...(typeof input.modelReasoningEffort === 'string' && input.modelReasoningEffort.trim()
+      ? { modelReasoningEffort: input.modelReasoningEffort.trim() }
+      : {}),
     ...(typeof input.codexHome === 'string' ? { codexHome: input.codexHome } : {}),
     inheritCodexHome: input.inheritCodexHome !== false,
     ignoreUserConfig: input.ignoreUserConfig === true,
