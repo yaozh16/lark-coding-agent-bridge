@@ -2,33 +2,28 @@ import type { LarkChannel, SendOptions } from '@larksuite/channel';
 import type { RunCardRenderOptions } from '../card/run-renderer';
 import { renderCard } from '../card/run-renderer';
 import type { RunState } from '../card/run-state';
-import { initialState } from '../card/run-state';
 import { renderText } from '../card/text-renderer';
 import { log } from '../core/logger';
 import type { RunRenderSink } from './agent-event-processor';
+import { LatestSnapshotScheduler } from './latest-snapshot-scheduler';
 
-const STREAM_TERMINAL_GRACE_MS = 3000;
+const SNAPSHOT_REFRESH_MIN_INTERVAL_MS = 1000;
+const SNAPSHOT_HEARTBEAT_INTERVAL_MS = 10_000;
 
-type MarkdownCtrl = { setContent(markdown: string): Promise<void> };
-type CardCtrl = { update(next: object | ((current: object) => object)): Promise<void> };
-
-interface Segment<Ctrl> {
-  done: Deferred<void>;
-  producerStarted: boolean;
-  ctrl?: Ctrl;
-  latest?: RunState;
-  streamDone: Promise<StreamResult>;
+interface Segment {
+  scheduler: LatestSnapshotScheduler<RunState>;
+  messageId?: string;
 }
-
-type StreamResult =
-  | { ok: true }
-  | { ok: false; err: unknown };
 
 export interface BaseRunRenderSinkOptions {
   channel: LarkChannel;
   chatId: string;
   sendOpts: SendOptions;
   maxChars: number;
+  /** Internal/test override. Production uses one refresh at most per second. */
+  refreshMinIntervalMs?: number;
+  /** Internal/test override. Production refreshes an idle running card every 10s. */
+  heartbeatIntervalMs?: number;
 }
 
 export class MarkdownRunRenderSink implements RunRenderSink {
@@ -36,13 +31,19 @@ export class MarkdownRunRenderSink implements RunRenderSink {
   private readonly chatId: string;
   private readonly sendOpts: SendOptions;
   private readonly maxChars: number;
-  private current: Segment<MarkdownCtrl> | undefined;
+  private readonly refreshMinIntervalMs: number;
+  private readonly heartbeatIntervalMs: number;
+  private current: Segment | undefined;
 
   constructor(opts: BaseRunRenderSinkOptions) {
     this.channel = opts.channel;
     this.chatId = opts.chatId;
     this.sendOpts = opts.sendOpts;
     this.maxChars = opts.maxChars;
+    this.refreshMinIntervalMs =
+      opts.refreshMinIntervalMs ?? SNAPSHOT_REFRESH_MIN_INTERVAL_MS;
+    this.heartbeatIntervalMs =
+      opts.heartbeatIntervalMs ?? SNAPSHOT_HEARTBEAT_INTERVAL_MS;
   }
 
   measure(state: RunState): number {
@@ -50,76 +51,54 @@ export class MarkdownRunRenderSink implements RunRenderSink {
   }
 
   async updateActive(state: RunState): Promise<void> {
-    const segment = this.ensureSegment();
-    segment.latest = state;
-    if (segment.ctrl) {
-      await segment.ctrl.setContent(this.render(state));
-    }
+    this.ensureSegment().scheduler.offer(state);
   }
 
   async sealActive(state: RunState): Promise<void> {
-    await this.updateActive(state);
     await this.finishCurrent(state, 'seal');
   }
 
   async closeActive(state: RunState): Promise<void> {
-    await this.updateActive(state);
     await this.finishCurrent(state, 'close');
   }
 
-  private ensureSegment(): Segment<MarkdownCtrl> {
+  private ensureSegment(): Segment {
     if (this.current) return this.current;
-    const segment: Segment<MarkdownCtrl> = {
-      done: deferred<void>(),
-      producerStarted: false,
-      streamDone: Promise.resolve({ ok: true }),
+    let segment!: Segment;
+    segment = {
+      scheduler: new LatestSnapshotScheduler<RunState>({
+        minIntervalMs: this.refreshMinIntervalMs,
+        heartbeatIntervalMs: this.heartbeatIntervalMs,
+        push: (state) => this.publish(segment, state),
+      }),
     };
-    segment.streamDone = this.channel.stream(
-      this.chatId,
-      {
-        markdown: async (ctrl) => {
-          segment.producerStarted = true;
-          segment.ctrl = ctrl;
-          if (segment.latest) {
-            await ctrl.setContent(this.render(segment.latest));
-          }
-          await segment.done.promise;
-        },
-      },
-      this.sendOpts,
-    ).then(
-      () => ({ ok: true as const }),
-      (err) => ({ ok: false as const, err }),
-    );
     this.current = segment;
     return segment;
   }
 
   private async finishCurrent(state: RunState, step: 'seal' | 'close'): Promise<void> {
-    const segment = this.current;
-    if (!segment) return;
-    segment.done.resolve();
+    const segment = this.current ?? this.ensureSegment();
     this.current = undefined;
 
-    if (!segment.producerStarted) {
-      await this.fallbackSend(state, step);
+    try {
+      segment.scheduler.offer(state);
+      await segment.scheduler.finish();
+    } catch (err) {
+      log.fail('snapshot', err, { mode: 'markdown', step });
+    }
+  }
+
+  private async publish(segment: Segment, state: RunState): Promise<void> {
+    const card = markdownSnapshotCard(this.renderMarkdown(state), state);
+    if (segment.messageId) {
+      await this.channel.updateCard(segment.messageId, card);
       return;
     }
-
-    await settleStreamResult(segment.streamDone, 'markdown', step);
+    const sent = await this.channel.send(this.chatId, { card }, this.sendOpts);
+    segment.messageId = sent.messageId;
   }
 
-  private async fallbackSend(state: RunState, step: string): Promise<void> {
-    const body = this.render(state);
-    if (!body.trim()) return;
-    try {
-      await this.channel.send(this.chatId, { markdown: body }, this.sendOpts);
-    } catch (err) {
-      log.fail('stream', err, { mode: 'markdown', step: `fallback-${step}` });
-    }
-  }
-
-  private render(state: RunState): string {
+  private renderMarkdown(state: RunState): string {
     const renderedChars = this.measure(state);
     return appendMarkdownFooter(renderText(state), refreshCharSuffix(state, renderedChars, this.maxChars));
   }
@@ -135,7 +114,9 @@ export class CardRunRenderSink implements RunRenderSink {
   private readonly sendOpts: SendOptions;
   private readonly renderOptions: RunCardRenderOptions;
   private readonly maxChars: number;
-  private current: Segment<CardCtrl> | undefined;
+  private readonly refreshMinIntervalMs: number;
+  private readonly heartbeatIntervalMs: number;
+  private current: Segment | undefined;
 
   constructor(opts: CardRunRenderSinkOptions) {
     this.channel = opts.channel;
@@ -143,6 +124,10 @@ export class CardRunRenderSink implements RunRenderSink {
     this.sendOpts = opts.sendOpts;
     this.renderOptions = opts.renderOptions;
     this.maxChars = opts.maxChars;
+    this.refreshMinIntervalMs =
+      opts.refreshMinIntervalMs ?? SNAPSHOT_REFRESH_MIN_INTERVAL_MS;
+    this.heartbeatIntervalMs =
+      opts.heartbeatIntervalMs ?? SNAPSHOT_HEARTBEAT_INTERVAL_MS;
   }
 
   measure(state: RunState): number {
@@ -150,87 +135,97 @@ export class CardRunRenderSink implements RunRenderSink {
   }
 
   async updateActive(state: RunState): Promise<void> {
-    const segment = this.ensureSegment();
-    segment.latest = state;
-    if (segment.ctrl) {
-      await segment.ctrl.update(this.render(state));
-    }
+    this.ensureSegment().scheduler.offer(state);
   }
 
   async sealActive(state: RunState): Promise<void> {
-    await this.updateActive(state);
     await this.finishCurrent(state, 'seal');
   }
 
   async closeActive(state: RunState): Promise<void> {
-    await this.updateActive(state);
     await this.finishCurrent(state, 'close');
   }
 
-  private ensureSegment(): Segment<CardCtrl> {
+  private ensureSegment(): Segment {
     if (this.current) return this.current;
-    const segment: Segment<CardCtrl> = {
-      done: deferred<void>(),
-      producerStarted: false,
-      streamDone: Promise.resolve({ ok: true }),
+    let segment!: Segment;
+    segment = {
+      scheduler: new LatestSnapshotScheduler<RunState>({
+        minIntervalMs: this.refreshMinIntervalMs,
+        heartbeatIntervalMs: this.heartbeatIntervalMs,
+        push: (state) => this.publish(segment, state),
+      }),
     };
-    segment.streamDone = this.channel.stream(
-      this.chatId,
-      {
-        card: {
-          initial: renderCard(initialState, this.renderOptions),
-          producer: async (ctrl) => {
-            segment.producerStarted = true;
-            segment.ctrl = ctrl;
-            if (segment.latest) {
-              await ctrl.update(this.render(segment.latest));
-            }
-            await segment.done.promise;
-          },
-        },
-      },
-      this.sendOpts,
-    ).then(
-      () => ({ ok: true as const }),
-      (err) => ({ ok: false as const, err }),
-    );
     this.current = segment;
     return segment;
   }
 
   private async finishCurrent(state: RunState, step: 'seal' | 'close'): Promise<void> {
-    const segment = this.current;
-    if (!segment) return;
-    segment.done.resolve();
+    const segment = this.current ?? this.ensureSegment();
     this.current = undefined;
 
-    if (!segment.producerStarted) {
-      await this.fallbackSend(state, step);
-      return;
+    try {
+      segment.scheduler.offer(state);
+      await segment.scheduler.finish();
+    } catch (err) {
+      log.fail('snapshot', err, { mode: 'card', step });
     }
-
-    await settleStreamResult(segment.streamDone, 'card', step);
   }
 
-  private async fallbackSend(state: RunState, step: string): Promise<void> {
-    try {
-      await this.channel.send(
-        this.chatId,
-        { card: this.render(state) },
-        this.sendOpts,
-      );
-    } catch (err) {
-      log.fail('stream', err, { mode: 'card', step: `fallback-${step}` });
+  private async publish(segment: Segment, state: RunState): Promise<void> {
+    const card = this.render(state);
+    if (segment.messageId) {
+      await this.channel.updateCard(segment.messageId, card);
+      return;
     }
+    const sent = await this.channel.send(this.chatId, { card }, this.sendOpts);
+    segment.messageId = sent.messageId;
   }
 
   private render(state: RunState): object {
     const renderedChars = this.measure(state);
-    return appendCardFooter(
-      renderCard(state, this.renderOptions),
-      refreshCharSuffix(state, renderedChars, this.maxChars),
+    return disableStreaming(
+      appendCardFooter(
+        renderCard(state, this.renderOptions),
+        refreshCharSuffix(state, renderedChars, this.maxChars),
+      ),
     );
   }
+}
+
+function markdownSnapshotCard(markdown: string, state: RunState): object {
+  const content = markdown.trim() || (state.terminal === 'done' ? '_（未返回内容）_' : '…');
+  return {
+    schema: '2.0',
+    config: {
+      streaming_mode: false,
+      summary: { content: snapshotSummary(state) },
+    },
+    body: {
+      elements: [{ tag: 'markdown', content }],
+    },
+  };
+}
+
+function disableStreaming(card: object): object {
+  const config = (card as { config?: object }).config ?? {};
+  return {
+    ...card,
+    config: {
+      ...config,
+      streaming_mode: false,
+    },
+  };
+}
+
+function snapshotSummary(state: RunState): string {
+  if (state.terminal === 'interrupted') return '已中断';
+  if (state.terminal === 'idle_timeout') return '已超时';
+  if (state.terminal === 'error') return '出错';
+  if (state.terminal === 'done') return '已完成';
+  if (state.footer === 'tool_running') return '正在调用工具';
+  if (state.footer === 'streaming') return '正在输出';
+  return '思考中';
 }
 
 function appendMarkdownFooter(markdown: string, footer: string | undefined): string {
@@ -262,53 +257,21 @@ function refreshCharSuffix(
   maxChars: number,
 ): string | undefined {
   if (state.terminal !== 'running' || !Number.isFinite(maxChars)) return undefined;
-  return `刷新字符 ${formatCount(renderedChars)}/${formatCount(maxChars)}`;
+  return `刷新字符 ${formatCount(renderedChars)}/${formatCount(maxChars)} · Updated at ${formatLocalTimestamp(new Date())}`;
 }
 
 function formatCount(n: number): string {
   return Math.floor(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
-async function settleStreamResult(
-  streamDone: Promise<StreamResult>,
-  mode: 'card' | 'markdown',
-  step: string,
-): Promise<void> {
-  const result = await Promise.race([
-    streamDone,
-    delay(STREAM_TERMINAL_GRACE_MS).then(() => undefined),
-  ]);
-  if (!result) {
-    log.warn('stream', 'terminal-grace-expired', {
-      mode,
-      step,
-      graceMs: STREAM_TERMINAL_GRACE_MS,
-    });
-    void streamDone.then((late) => {
-      if (!late.ok) {
-        log.fail('stream', late.err, { mode, step: 'stream-terminal-late' });
-      }
-    });
-    return;
-  }
-  if (!result.ok) {
-    log.fail('stream', result.err, { mode, step: 'stream' });
-  }
+function formatLocalTimestamp(value: Date): string {
+  return [
+    value.getFullYear(),
+    twoDigits(value.getMonth() + 1),
+    twoDigits(value.getDate()),
+  ].join('-') + ` ${twoDigits(value.getHours())}:${twoDigits(value.getMinutes())}:${twoDigits(value.getSeconds())}`;
 }
 
-interface Deferred<T> {
-  promise: Promise<T>;
-  resolve(value: T): void;
-}
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function twoDigits(value: number): string {
+  return value.toString().padStart(2, '0');
 }

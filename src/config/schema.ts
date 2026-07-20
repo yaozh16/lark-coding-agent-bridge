@@ -60,7 +60,7 @@ export interface SecretsConfig {
 /**
  * How replies are rendered in IM chats:
  *   - `card`: full interactive card (tool panels, ⏹ button, footer status)
- *   - `markdown`: lightweight streaming markdown card (typewriter, no buttons)
+ *   - `markdown`: lightweight markdown snapshot card (atomic refresh, no buttons)
  *   - `text`: plain markdown post sent once at run completion (no streaming)
  *
  * Pre-0.1.27 only had `card` and `text`, where `text` meant what's now called
@@ -89,8 +89,8 @@ export interface AppPreferences {
   /** Reply rendering mode for IM (group/p2p) messages. Default 'card'. */
   messageReply?: MessageReplyMode;
   /**
-   * Internal marker: pre-0.1.27 the value `'text'` meant "lightweight
-   * streaming markdown card" (what's now called `'markdown'`). On upgrade
+   * Internal marker: pre-0.1.27 the value `'text'` meant the live markdown
+   * card mode (what's now called `'markdown'`). On upgrade
    * we'd silently switch those users to true plain-text behavior unless we
    * coerce; this flag is set the first time the user submits `/config`
    * after the rename, indicating their `messageReply` value is in the
@@ -104,7 +104,7 @@ export interface AppPreferences {
    */
   showToolCalls?: boolean;
   /**
-   * Soft character budget for one streaming reply block. When a card/markdown
+   * Soft character budget for one live reply block. When a card/markdown
    * reply grows past this size, bridge seals the current message and continues
    * in a new one while dropping sealed content from active RunState memory.
    * Default 12000. Range 4000-60000; out-of-range values fall back to default.

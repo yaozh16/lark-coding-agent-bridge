@@ -112,7 +112,7 @@ export function configFormCard(opts: ConfigFormOpts): object {
               content:
                 '**消息回复方式**\n' +
                 '_纯文本:agent 跑完一次性发出,不流式,体感最轻_\n' +
-                '_消息卡片:轻量流式 markdown 卡片,飞书原生打字机动画_',
+                '_消息卡片:定时整卡刷新最新内容,不使用打字机动画_',
             },
             {
               tag: 'select_static',
@@ -146,8 +146,8 @@ export function configFormCard(opts: ConfigFormOpts): object {
             {
               tag: 'markdown',
               content:
-                '\n**流式分段上限**\n' +
-                '_单条流式回复超过该字符预算后自动封存当前消息,并续写下一条_\n' +
+                '\n**单条卡片分段上限**\n' +
+                '_单条回复超过该字符预算后自动封存当前消息,并续写下一条_\n' +
                 '_默认 12000,范围 4000-60000_',
             },
             {

@@ -61,13 +61,15 @@ interface FakeLarkChannel {
   disconnect(): Promise<void>;
   getChatMode(chatId: string): Promise<'group' | 'topic'>;
   getConnectionStatus(): { state: 'connected'; reconnectAttempts: number };
-  send(chatId: string, content: unknown, options?: unknown): Promise<void>;
+  send(chatId: string, content: unknown, options?: unknown): Promise<{ messageId: string }>;
+  updateCard(messageId: string, card: object): Promise<void>;
   stream(chatId: string, input: unknown, options?: unknown): Promise<void>;
   addReaction(messageId: string, emojiType: string): Promise<string>;
   removeReaction(messageId: string, reactionId: string): Promise<void>;
 }
 
-type StreamFn = FakeLarkChannel['stream'];
+type SendFn = FakeLarkChannel['send'];
+type UpdateCardFn = FakeLarkChannel['updateCard'];
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -78,8 +80,8 @@ afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
 });
 
-describe('markdown stream startup failures', () => {
-  it('does not leave the IM queue blocked when the agent exits before stream producer starts', async () => {
+describe('atomic markdown snapshot failures', () => {
+  it('does not leave the IM queue blocked when the agent exits before its first snapshot settles', async () => {
     const h = await createHarness();
     await startTestBridge(h);
 
@@ -94,8 +96,10 @@ describe('markdown stream startup failures', () => {
         path: { message_id: 'om_first', reaction_id: 'reaction_1' },
       }),
     );
-    expect(lastMarkdown(h.channel)).toContain('agent 失败');
-    expect(lastMarkdown(h.channel)).toContain('codex exited with code 1');
+    const snapshots = snapshotMarkdowns(h.channel);
+    expect(snapshots.some((markdown) => markdown.includes('agent 失败'))).toBe(true);
+    expect(snapshots.some((markdown) => markdown.includes('codex exited with code 1'))).toBe(true);
+    expect(h.channel.stream).not.toHaveBeenCalled();
   });
 
   it('does not wait for the working reaction before draining a failed agent run', async () => {
@@ -111,56 +115,44 @@ describe('markdown stream startup failures', () => {
     await h.channel.handlers.message?.(message('om_second', 'second'));
     await waitFor(() => h.agent.runOptions.length === 2, 1000);
 
-    expect(lastMarkdown(h.channel)).toContain('agent 失败');
+    expect(snapshotMarkdowns(h.channel).some((markdown) => markdown.includes('agent 失败'))).toBe(true);
 
     reaction.resolve({ data: { reaction_id: 'reaction_1' } });
     await waitFor(() => h.channel.rawClient.im.v1.messageReaction.delete.mock.calls.length > 0);
+    expect(h.channel.stream).not.toHaveBeenCalled();
   });
 
-  it('logs stream failures that arrive after terminal grace expires', async () => {
-    const streamFailure = deferred<void>();
-    let streamProducerStarted = false;
+  it('logs a full-card patch failure and still drains the next queued message', async () => {
+    const updateFailure = new Error('atomic card patch failed');
     const h = await createHarness({
-      stream: async (_chatId, input) => {
-        const producer = (input as {
-          markdown?: (ctrl: { setContent(markdown: string): Promise<void> }) => Promise<void>;
-        }).markdown;
-        if (producer) {
-          streamProducerStarted = true;
-          void producer({ setContent: vi.fn(async () => {}) });
-        }
-        await streamFailure.promise;
+      updateCard: async () => {
+        throw updateFailure;
       },
     });
     const fail = vi.spyOn(log, 'fail').mockImplementation(() => {});
     await startTestBridge(h);
 
     await h.channel.handlers.message?.(message('om_first', 'first'));
-    await waitFor(() => streamProducerStarted);
-    await waitFor(
-      () => h.channel.rawClient.im.v1.messageReaction.delete.mock.calls.length > 0,
-      4500,
+    await waitFor(() => h.agent.runOptions.length === 1);
+    await waitFor(() =>
+      fail.mock.calls.some((call) =>
+        call[0] === 'snapshot' &&
+        call[1] === updateFailure &&
+        (call[2] as { mode?: string; step?: string } | undefined)?.mode === 'markdown' &&
+        (call[2] as { step?: string } | undefined)?.step === 'close',
+      ),
     );
 
     await h.channel.handlers.message?.(message('om_second', 'second'));
     await waitFor(() => h.agent.runOptions.length === 2);
-
-    streamFailure.reject(new Error('late stream failed'));
-
-    await waitFor(() =>
-      fail.mock.calls.some((call) =>
-        call[0] === 'stream' &&
-        call[1] instanceof Error &&
-        call[1].message === 'late stream failed' &&
-        (call[2] as { step?: string } | undefined)?.step === 'stream-terminal-late',
-      ),
-    );
-  }, 10_000);
+    expect(h.channel.stream).not.toHaveBeenCalled();
+  });
 });
 
 async function createHarness(options: {
   reactionCreate?: () => Promise<{ data: { reaction_id: string } }>;
-  stream?: StreamFn;
+  send?: SendFn;
+  updateCard?: UpdateCardFn;
 } = {}): Promise<{
   tmp: TmpProfile;
   channel: FakeLarkChannel;
@@ -248,10 +240,13 @@ async function startTestBridge(h: {
 
 function createFakeLarkChannel(options: {
   reactionCreate?: () => Promise<{ data: { reaction_id: string } }>;
-  stream?: StreamFn;
+  send?: SendFn;
+  updateCard?: UpdateCardFn;
 } = {}): FakeLarkChannel {
   const handlers: MessageHandlerMap = {};
   const sent: FakeLarkChannel['sent'] = [];
+  const messageIndexById = new Map<string, number>();
+  let nextMessage = 1;
   const channel: FakeLarkChannel = {
     handlers,
     sent,
@@ -290,11 +285,20 @@ function createFakeLarkChannel(options: {
     getConnectionStatus() {
       return { state: 'connected', reconnectAttempts: 0 };
     },
-    async send(chatId, content, options) {
-      sent.push({ chatId, content, options });
-    },
-    stream: options.stream ?? (async () => {
-      await new Promise<void>(() => {});
+    send: options.send ?? (async (chatId, content, sendOptions) => {
+      const messageId = `om_snapshot_${nextMessage++}`;
+      messageIndexById.set(messageId, sent.length);
+      sent.push({ chatId, content, options: sendOptions });
+      return { messageId };
+    }),
+    updateCard: options.updateCard ?? (async (messageId, card) => {
+      const index = messageIndexById.get(messageId);
+      const previous = index === undefined ? undefined : sent[index];
+      if (index === undefined || !previous) throw new Error(`unknown message id: ${messageId}`);
+      sent[index] = { ...previous, content: { card } };
+    }),
+    stream: vi.fn(async () => {
+      throw new Error('atomic snapshot rendering must not call channel.stream');
     }),
     async addReaction(messageId, emojiType) {
       const r = await channel.rawClient.im.v1.messageReaction.create({
@@ -355,10 +359,16 @@ function message(messageId: string, content: string): NormalizedMessage {
   } as unknown as NormalizedMessage;
 }
 
-function lastMarkdown(channel: FakeLarkChannel): string {
-  const content = channel.sent.at(-1)?.content as { markdown?: string } | undefined;
-  expect(content?.markdown).toBeTypeOf('string');
-  return content?.markdown ?? '';
+function snapshotMarkdowns(channel: FakeLarkChannel): string[] {
+  return channel.sent.flatMap((message) => {
+    const elements = (message.content as {
+      card?: { body?: { elements?: Array<{ tag?: string; content?: string }> } };
+    } | undefined)?.card?.body?.elements;
+    if (!Array.isArray(elements)) return [];
+    return elements
+      .filter((element) => element.tag === 'markdown' && typeof element.content === 'string')
+      .map((element) => element.content as string);
+  });
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {

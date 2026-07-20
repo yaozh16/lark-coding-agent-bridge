@@ -50,6 +50,7 @@ export interface FakeChannel {
   };
   createCard(cardJson: unknown): Promise<{ cardId: string }>;
   updateCardById(cardId: string, cardJson: unknown, sequence: number): Promise<void>;
+  updateCard(messageId: string, cardJson: unknown): Promise<void>;
   send(chatId: string, content: unknown, options?: unknown): Promise<{ messageId: string }>;
   stream(chatId: string, input: unknown, options?: unknown): Promise<void>;
 }
@@ -60,18 +61,21 @@ export function createFakeChannel(): FakeChannel {
   const requests: FakeRawClientRequest[] = [];
   const rawThreadIds = new Map<string, string>();
   const cardById = new Map<string, unknown>();
+  const messageIndexById = new Map<string, number>();
   let nextCard = 1;
   let nextMessage = 1;
 
   const pushManagedCardMessage = (params: unknown, fallbackChatId: string): { message_id: string } => {
     requests.push({ method: 'im.v1.message.create', params });
     const card = resolveReferencedCard(params);
+    const messageId = `om_fake_${nextMessage++}`;
+    messageIndexById.set(messageId, sent.length);
     sent.push({
       chatId: extractReceiveId(params) ?? fallbackChatId,
       content: card ? { card } : params,
       options: undefined,
     });
-    return { message_id: `om_fake_${nextMessage++}` };
+    return { message_id: messageId };
   };
 
   return {
@@ -129,6 +133,15 @@ export function createFakeChannel(): FakeChannel {
     async updateCardById(cardId: string, cardJson: unknown, sequence: number): Promise<void> {
       requests.push({ method: 'cardkit.v1.card.update', params: { cardId, cardJson, sequence } });
     },
+    async updateCard(messageId: string, cardJson: unknown): Promise<void> {
+      requests.push({ method: 'im.v1.message.patch', params: { messageId, cardJson } });
+      const index = messageIndexById.get(messageId);
+      const previous = index === undefined ? undefined : sent[index];
+      if (index === undefined || !previous) {
+        throw new Error(`unknown fake message id: ${messageId}`);
+      }
+      sent[index] = { ...previous, content: { card: cardJson } };
+    },
     async send(chatId: string, content: unknown, options?: unknown): Promise<{ messageId: string }> {
       // Resolve a `{ cardId }` reference back to the card JSON so assertions
       // can read the rendered card content (matching the legacy send shape).
@@ -137,8 +150,10 @@ export function createFakeChannel(): FakeChannel {
         typeof cardId === 'string' && cardById.has(cardId)
           ? { card: cardById.get(cardId) }
           : content;
+      const messageId = `om_fake_${nextMessage++}`;
+      messageIndexById.set(messageId, sent.length);
       sent.push({ chatId, content: resolved, options });
-      return { messageId: `om_fake_${nextMessage++}` };
+      return { messageId };
     },
     async stream(chatId: string, input: unknown, options?: unknown): Promise<void> {
       const record: FakeChannelStream = {

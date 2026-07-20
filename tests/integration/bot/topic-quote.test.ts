@@ -51,7 +51,8 @@ interface FakeLarkChannel {
   disconnect(): Promise<void>;
   getChatMode(chatId: string): Promise<'group' | 'topic'>;
   getConnectionStatus(): { state: 'connected'; reconnectAttempts: number };
-  send(chatId: string, content: unknown, options?: unknown): Promise<void>;
+  send(chatId: string, content: unknown, options?: unknown): Promise<{ messageId: string }>;
+  updateCard(messageId: string, card: object): Promise<void>;
   stream(chatId: string, input: unknown, options?: unknown): Promise<void>;
 }
 
@@ -272,7 +273,10 @@ function createFakeLarkChannel(options: {
     getConnectionStatus() {
       return { state: 'connected', reconnectAttempts: 0 };
     },
-    async send() {},
+    async send() {
+      return { messageId: 'om_snapshot' };
+    },
+    async updateCard() {},
     async stream(_chatId, input) {
       if (isMarkdownStreamInput(input)) {
         await input.markdown({ setContent: async () => {} });

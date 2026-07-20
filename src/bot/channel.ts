@@ -884,7 +884,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     : {};
 
   // For non-card modes Claude's output doesn't surface visually until either
-  // a first streamed token (markdown mode) or the whole run ends (text mode).
+  // the first markdown snapshot is published or the whole run ends (text mode).
   // Add a "Typing" reaction to the triggering message as an instant ack, but
   // never let that outbound API call block agent event draining.
   const reactionPromise =

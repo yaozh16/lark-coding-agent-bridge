@@ -53,7 +53,6 @@ export class AgentEventProcessor {
 
   async finalize(state: RunState): Promise<RunState> {
     this.state = compactState(state, this.maxChars);
-    await this.sink.updateActive(this.state);
     await this.sink.closeActive(this.state);
     return this.state;
   }
