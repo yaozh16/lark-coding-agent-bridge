@@ -196,19 +196,19 @@ export class SessionCatalog {
         await fh.close();
       }
       await rename(tmp, this.path);
-      try {
-        const dir = await open(dirname(this.path), 'r');
-        try {
-          await dir.sync();
-        } finally {
-          await dir.close();
-        }
-      } catch {
-        // Directory fsync is not available on every platform.
-      }
     } catch (err) {
       await rm(tmp, { force: true }).catch(() => {});
       throw err;
+    }
+    try {
+      const dir = await open(dirname(this.path), 'r');
+      try {
+        await dir.sync();
+      } finally {
+        await dir.close();
+      }
+    } catch {
+      // Directory fsync is not available on every platform.
     }
   }
 }
