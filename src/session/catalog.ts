@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { open, readFile, rename, mkdir } from 'node:fs/promises';
+import { open, readFile, rename, mkdir, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { paths } from '../config/paths';
 import { log } from '../core/logger';
@@ -189,12 +189,17 @@ export class SessionCatalog {
     const payload = `${JSON.stringify(this.entries(), null, 2)}\n`;
     const fh = await open(tmp, 'w', 0o600);
     try {
-      await fh.writeFile(payload, 'utf8');
-      await fh.sync();
-    } finally {
-      await fh.close();
+      try {
+        await fh.writeFile(payload, 'utf8');
+        await fh.sync();
+      } finally {
+        await fh.close();
+      }
+      await rename(tmp, this.path);
+    } catch (err) {
+      await rm(tmp, { force: true }).catch(() => {});
+      throw err;
     }
-    await rename(tmp, this.path);
     try {
       const dir = await open(dirname(this.path), 'r');
       try {
